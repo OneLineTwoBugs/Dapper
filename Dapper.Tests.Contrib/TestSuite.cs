@@ -69,6 +69,16 @@ namespace Dapper.Tests.Contrib
         string Name { get; set; }
         int Age { get; set; }
     }
+    [Table("Users")]
+    public interface IUser2
+    {
+        [Key]
+        int Id { get; set; }
+        [Column("Name")]
+        string Name2 { get; set; }
+        [Column("Age")]
+        int Age2 { get; set; }
+    }
 
     public class User : IUser
     {
@@ -549,6 +559,55 @@ namespace Dapper.Tests.Contrib
 
                 user = connection.Get<IUser>(id);
                 Assert.Equal("Bob", user.Name);
+            }
+        }
+
+        [Fact]
+        public void ColumnAttribute()
+        {
+            using (var connection = GetOpenConnection())
+            {
+                var type = ProxyGenerator.GetInterfaceProxyType<IUser2>();
+
+                var customPropertyTypeMap = new CustomPropertyTypeMap(type,
+                    (type, columnName) =>
+                    {
+                        var props = type.GetProperties();
+                        var targetProp = props.FirstOrDefault(prop => prop.GetCustomAttributes(false).OfType<ColumnAttribute>().Any(attr => String.Equals(attr.ColumnName, columnName, StringComparison.OrdinalIgnoreCase)));
+                        if (targetProp is object) return targetProp;
+                        return props.FirstOrDefault(prop => String.Equals(prop.Name, columnName, StringComparison.OrdinalIgnoreCase));
+                    }
+                );
+                SqlMapper.SetTypeMap(type, customPropertyTypeMap);
+                connection.DeleteAll<IUser>();
+
+
+                //insert
+                var user = ProxyGenerator.GetInterfaceProxy<IUser2>();
+                Assert.False(((ProxyGenerator.IProxy)user).IsDirty);
+                user.Age2 = 5;
+                user.Name2 = "Bob";
+                var id = connection.Insert(user);
+                Assert.True(id > 0);
+
+                //get
+                var userRes = connection.Get<IUser2>(id);
+                Assert.Equal(5, userRes.Age2);
+                Assert.Equal("Bob", userRes.Name2);
+                Assert.Equal(id, userRes.Id);
+
+                
+                //partial select
+                var user2 = connection.QueryFirstOrDefault<IUser2>("SELECT Id, Age FROM Users WHERE Id = @id", new { id });
+                Assert.Equal(2, ((ProxyGenerator.IProxy)user2).DirtyFields.Count()); //only Id and Age have been set by Dapper.query
+                Assert.Null(user2.Name2); //Name is really null
+
+                //update
+                user2.Age2 = 6;
+                Assert.True(connection.Update<IUser2>(user2)); //we just changed Age. Name is still null. Name should not be changed by this query
+                user2 = connection.Get<IUser2>(id);
+                Assert.Equal("Bob", user2.Name2);
+
             }
         }
 
